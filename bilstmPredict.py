@@ -3,6 +3,7 @@ import sys
 import dynet as dy
 import pickle
 import numpy as np
+import time
 
 epochs = 5
 iteration_till_dev_size = 500 #num sentences
@@ -12,7 +13,7 @@ out_layer = 5
 tags = ()
 EMB_SIZE = 50
 BILSTM_INPUT = 50
-CHAR_EMB_SIZE = 50
+CHAR_EMB_SIZE = 30
 unk_word = "*UNK*"
 
 class LstmAcceptor(object):
@@ -77,101 +78,34 @@ class BiLstm(object):
                 seq_rep.append(U*(dy.concatenate([embeds[voc[w[0]]], char_out])))
         return seq_rep
 
-def train(d_set, epochs):
-    sum_of_losses = 0.0
-    correct = 0.0
-    sentence_idx = 0
-    ner_labels = 0
-    words_so_far = 0
-    print("Performing train")
-    for epoch in range(epochs):
-        #random.shuffle(set)
-        for i, (sequence, labels) in enumerate(d_set):
-            dy.renew_cg()  # new computation graph
-            preds = bilstm(sequence)
-            local_losses = []
-            for pred,label in zip(preds,labels):
-                y_hat = np.argmax(pred.npvalue())
-                if data_set == "ner":
-                    correct += 1 if y_hat == label and label != tags["O"] else 0
-                    ner_labels += 1 if (y_hat == label and label != tags["O"]) or (y_hat != label) else 0
-                else:
-                    correct += 1 if y_hat == label else 0
-                loss = -dy.log(dy.pick(pred, label))
-                local_losses.append(loss)
-            words_so_far += len(preds)
-            # update network by sentence loss
-            sent_loss = dy.esum(local_losses)
-            sum_of_losses += sent_loss.scalar_value()
-            sent_loss.backward()
-            trainer.update()
-            if sentence_idx == iteration_till_dev_size:
-                sentence_idx=0
-                test()
-            else:
-                sentence_idx +=1
-        print ("train loss: {0}".format(sum_of_losses / len(d_set)))
-        if data_set == "ner":
-            print("train accuracy: {0}".format((correct / ner_labels) * 100))
-        else:
-            print("train accuracy: {0}".format((correct / words_so_far) * 100))
-        sum_of_losses = 0.0
-        correct = 0.0
-        words_so_far = 0
-        # if epoch == 1:
-        #     trainer.set_learning_rate(0.001)
-        # #     trainer.learning_rate = 0.001
-        if epoch == 3:
-            trainer.learning_rate = 0.0005
-        if epoch == 4:
-            trainer.learning_rate = 0.0002
-        print(trainer.learning_rate)
-
 def test():
-    correct = 0.0
     words_so_far = 0
-    ner_labels = 0
-    for sequence, labels in dev_set:
+    preds = []
+    for sequence, labels in test_set:
         dy.renew_cg()
         preds = bilstm(sequence)
 
         for (pred,label) in zip(preds,labels):
-            y_hat = np.argmax(pred.npvalue())
-            if data_set == "ner":
-                correct += 1 if y_hat == label and label != tags["O"] else 0
-                ner_labels += 1 if (y_hat == label and label != tags["O"]) or (y_hat != label) else 0
-            else:
-                correct += 1 if y_hat == label else 0
-        words_so_far += len(preds)
-    if data_set == "ner":
-        print("dev accuracy: {0}".format((correct / ner_labels) * 100))
-    else:
-        print("dev accuracy: {0}".format((correct/words_so_far)*100))
+            preds.append(np.argmax(pred.npvalue()))
+    return preds
 
 def init_params_by_dataset(data_set):
-    global out_layer, tags
-    tags_file = "ner_tags" if data_set == "ner" else "pos_tags"
-    with open(tags_file, "rb") as f:
-        tags = pickle.load(f)
+    global out_layer
     out_layer = len(tags)
 
-def init_params_by_rep(rep, trainFile):
+def init_params_by_rep(rep, voc):
     if rep == "a":
-        voc, train_set = build_a_rep(trainFile, False)
-        _, dev_set = build_a_rep(data_set+"/dev", True, voc)
+        _, test_set = build_a_rep(data_set+"/test", True, voc)
     elif rep == "b":
-        voc, train_set = build_b_rep(trainFile,False)
-        _, dev_set = build_b_rep(data_set + "/dev", True, voc)
+        _, test_set = build_b_rep(data_set + "/test", True, voc)
     elif rep == "c":
-        voc, train_set = build_c_rep(trainFile, False)
-        _, dev_set = build_c_rep(data_set + "/dev", True, voc)
+        _, test_set = build_c_rep(data_set + "/test", True, voc)
     elif rep == "d":
-        voc, train_set = build_d_rep(trainFile, False)
-        _, dev_set = build_d_rep(data_set + "/dev", True, voc)
+        _, test_set = build_d_rep(data_set + "/test", True, voc)
     voc[unk_word] = len(voc)
-    #embeds = m.add_lookup_parameters((len(voc), EMB_SIZE), init="normal", mean = 0, std = 1)
-    embeds = m.add_lookup_parameters((len(voc), EMB_SIZE))
-    return voc, embeds, train_set, dev_set
+    embeds = m.add_lookup_parameters((len(voc), EMB_SIZE), init="normal", mean = 0, std = 1)
+    #embeds = m.add_lookup_parameters((len(voc), EMB_SIZE))
+    return voc, embeds, test_set
 
 #-----------------Representation REGION
 def build_a_rep(trainFile, test, train_voc=None):
@@ -252,48 +186,52 @@ def build_vocab(trainFile, vocab_by_word, test = False, train_voc = None):
         content = f.readlines()
     for line in content:
         if not line.isspace():
-            word, tag = line.split()
-            ex = vocab_by_word(voc, word, tag, test)
+            word = line.split()
+            ex = vocab_by_word(voc, word, def_tag, test)
             sentence.extend(ex)
-            sent_tags.append(tags[tag])
+            sent_tags.append(tags[def_tag])
         else:
             examples.append((sentence, sent_tags))
-            if train_unk:
-                sub_sect = int(len(sentence)/4)
-                sub_sect = 0 if sub_sect < 0 else sub_sect
-                unk_indices = [random.randint(0, len(sentence)-1) for j in range(sub_sect)]
-                for i in unk_indices:
-                    orig_w = sentence[i]
-                    sentence[i] = unk_word
-                    examples.append((sentence,sent_tags))
-                    sentence[i] = orig_w
             sentence=[]
             sent_tags=[]
     return voc, examples
 
+def write_test(pred):
+    out = open(inputFile + "." + data_set, "w")
+    delim = " " if data_set == "pos" else "\t"
+    with open(data_set + "/test", "r") as f:
+        content = f.readlines()
+    i = 0
+    for line in content:
+        if not line.isspace():
+            out.write(line[:-1] + delim + pred_to_word[int(pred[i])] + "\n")
+            i += 1
+    out.close()
+
 if __name__ == '__main__':
-    if len(sys.argv) != 5:
+    global tags
+    if len(sys.argv) != 7:
         print("Program expects exactly 4 arguments, representation, train file, model file and data set type")
         exit(-1)
 
-    add, repr, trainFile, modelFile, data_set = sys.argv
+    add,  repr, modelFile, inputFile, data_set, tags_file, voc_file = sys.argv
+    with open(voc_file,"rb") as f:
+        voc = pickle.load(f)
+    with open(tags_file, "rb") as f:
+        tags = pickle.load(f)
+
+    pred_to_word = {v: k for k, v in tags.items()}
+    def_tag = pred_to_word[0]
     m = dy.Model()
-    train_unk = False
     trainer = dy.AdamTrainer(m)
     init_params_by_dataset(data_set)
-    voc, embeds, train_set, dev_set = init_params_by_rep(repr, trainFile)
-    print("first hid{0}, last hid {1}, out {2}, EMB {3},BIINP {4}, CHAR EM {5}, modelfile {6}, dt {7}".
-          format(hid_layer,top_hidden_layer, out_layer,EMB_SIZE,BILSTM_INPUT,CHAR_EMB_SIZE,modelFile,data_set ))
+    voc, embeds, test_set = init_params_by_rep(repr, voc)
     bilstm = BiLstm(repr, BILSTM_INPUT, hid_layer, top_hidden_layer, m, out_layer)
-    train(train_set, epochs)
-    bi_f_top = bilstm.forward_top_builder.param_collection()
-    bi_f_bot = bilstm.forward_bot_builder.param_collection()
-    bi_b_top = bilstm.backward_top_builder.param_collection()
-    bi_b_bot = bilstm.backward_bot_builder.param_collection()
-    lstm_param = bilstm.lstm.builder.param_collection()
-    m.save(modelFile+".model")
-    bi_f_bot.save(modelFile+"_bi_f_bot.model")
-    bi_f_top.save(modelFile + "_bi_f_top.model")
-    bi_b_bot.save(modelFile + "_bi_b_bot.model")
-    bi_b_top.save(modelFile+"_bi_b_top.model")
-    lstm_param.save(modelFile + "_lstm.model")
+    m.populate(modelFile+".model")
+    bilstm.forward_top_builder.param_collection().populate(modelFile + "_bi_f_top.model")
+    bilstm.forward_bot_builder.param_collection().populate(modelFile + "_bi_f_bot.model")
+    bilstm.backward_top_builder.param_collection().populate(modelFile + "_bi_b_top.model")
+    bilstm.backward_bot_builder.param_collection().populate(modelFile + "_bi_b_bot.model")
+    bilstm.lstm.builder.param_collection().populate(modelFile + "_lstm.model")
+    preds = test()
+    write_test(preds)

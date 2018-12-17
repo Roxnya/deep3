@@ -6,8 +6,6 @@ ex_size = 9
 def generate_examples(num_ex, alphabet, label):
     ex,examples = [], []
     for _ in range(num_ex):
-        # num_sequence = [np.random.randint(1, 10, np.random.randint(1, 21)) for i in range(5)]
-        # num_letters = [[np.random.choise(alphabet(i), np.random.randint(1, 21)) for i in range(4)]]
         j = 0
         for ex_num in range(0,ex_size-1,2):
             ex.append("".join([random.choice("123456789") for i in range(random.randint(1, 21))]))
@@ -25,4 +23,32 @@ def generate_train_test_set():
         pickle.dump(pos_examples[0:600]+neg_examples[0:600],f)
     with open("test_set","wb") as f:
         pickle.dump(pos_examples[600:1200]+neg_examples[600:1200],f)
-generate_train_test_set()
+
+def generate_anbn_examples():
+    examples = []
+    for _ in range(1000):
+        #choose if center repeats or not
+        a ="".join(['a' for i in range(random.randint(1, 60))])
+        b = "".join(['b' for i in range(len(a))])
+        ab = random.shuffle(a+b)
+        examples.append((ab, 0))
+        ra = "".join(['a' for i in range(random.randint(1, 60))])
+        b_len = random.randint(1, 60)
+        while b_len == len(ra):
+            b_len = random.randint(1, 60)
+        rb = "".join(['b' for i in range(b_len)])
+        rab = random.shuffle(rb+ra)
+        examples.append((rab, 1))
+    return examples
+
+def save_anbn():
+    train = generate_anbn_examples()
+    test = generate_anbn_examples()
+    random.shuffle(train)
+    random.shuffle(test)
+    with open("anbn/train_set", "wb+") as f:
+        pickle.dump(train, f)
+    with open("anbn/test_set", "wb+") as f:
+        pickle.dump(test, f)
+
+#generate_train_test_set()

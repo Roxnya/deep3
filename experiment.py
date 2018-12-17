@@ -2,6 +2,7 @@ import dynet as dy
 import numpy as np
 import pickle
 from sklearn.utils import shuffle
+import sys
 
 layers = 2
 VOC_SIZE = 13
@@ -21,12 +22,13 @@ class LstmAcceptor(object):
         result = V*dy.tanh(W * outputs[-1])
         return result
 
-def train(set, epochs, val = False):
+def train(dt_set, epochs, val = False):
     sum_of_losses = 0.0
     correct = 0.0
     print("Performing train")
     for epoch in range(epochs):
-        for sequence, label in set:
+        shuffle(dt_set)
+        for sequence, label in dt_set:
             dy.renew_cg()  # new computation graph
             vecs = [embeds[voc_map[char]] for char in sequence]
             preds = acceptor(vecs)
@@ -37,8 +39,8 @@ def train(set, epochs, val = False):
             if not val:
                 loss.backward()
                 trainer.update()
-        print (sum_of_losses / len(set))
-        print (correct/len(set) * 100)
+        print (sum_of_losses / len(dt_set))
+        print (correct / len(dt_set) * 100)
         sum_of_losses = 0.0
         correct = 0.0
 
@@ -52,26 +54,31 @@ def test(set):
         print (np.argmax(vals), vals)
 
 def get_data():
-    with open("voc_map", "rb") as f:
+    with open(folder+"voc_map", "rb") as f:
         voc_map = pickle.load(f)
-    with open("train_set", "rb") as f:
+    with open(folder+"train_set", "rb") as f:
         train = pickle.load(f)
     train = shuffle(train)
     train_size = round(0.8*len(train))
     train_set = train[:train_size]
     val_set = train[train_size:]
 
-    with open("test_set2", "rb") as f:
+    with open(folder+"test_set", "rb") as f:
         test_set = pickle.load(f)
     return voc_map, train_set, val_set, test_set
 
-m = dy.Model()
-voc_map, train_set, val_set, test_set = get_data()
-epochs = 20
-#use default rate
-trainer = dy.AdamTrainer(m)
-embeds = m.add_lookup_parameters((VOC_SIZE, EMB_SIZE))
-acceptor = LstmAcceptor(EMB_SIZE, 100, out_layer, hid_layer, m)
-train(train_set, epochs)
-train(val_set, 1, True)
-train(test_set, 1, True)
+if __name__ == '__main__':
+    folder = ""
+    if len(sys.argv) == 2:
+        add, ex_folder = sys.argv
+        folder = ex_folder+"/"
+    m = dy.Model()
+    voc_map, train_set, val_set, test_set = get_data()
+    epochs = 20
+    #use default rate
+    trainer = dy.AdamTrainer(m)
+    embeds = m.add_lookup_parameters((VOC_SIZE, EMB_SIZE))
+    acceptor = LstmAcceptor(EMB_SIZE, 100, out_layer, hid_layer, m)
+    train(train_set, epochs)
+    train(val_set, 1, True)
+    train(test_set, 1, True)
